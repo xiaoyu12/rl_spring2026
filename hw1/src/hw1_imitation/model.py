@@ -85,7 +85,6 @@ class MSEPolicy(BasePolicy):
 class FlowMatchingPolicy(BasePolicy):
     """Predicts action chunks with a flow matching loss."""
 
-    ### TODO: IMPLEMENT FlowMatchingPolicy HERE ###
     def __init__(
         self,
         state_dim: int,
@@ -94,21 +93,48 @@ class FlowMatchingPolicy(BasePolicy):
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        # Velocity field v_theta(o, A_tau, tau): input is the state, the flattened
+        # noisy chunk, and the scalar flow timestep; output is a flattened velocity.
+        self.net = build_mlp(
+            state_dim + chunk_size * action_dim + 1, chunk_size * action_dim, hidden_dims
+        )
+
+    def forward(
+        self, state: torch.Tensor, noisy_chunk: torch.Tensor, tau: torch.Tensor
+    ) -> torch.Tensor:
+        x = torch.cat([state, noisy_chunk.flatten(1), tau.view(-1, 1)], dim=-1)
+        return self.net(x).view(-1, self.chunk_size, self.action_dim)
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        noise = torch.randn_like(action_chunk)
+        tau = torch.rand(action_chunk.shape[0], device=action_chunk.device)
+        t = tau.view(-1, 1, 1)
+        noisy_chunk = t * action_chunk + (1 - t) * noise
+        pred = self(state, noisy_chunk, tau)
+        # Regress onto the straight-line velocity A - A_0 (Eq. 2).
+        return ((pred - (action_chunk - noise)) ** 2).sum(dim=(1, 2)).mean()
 
+    @torch.no_grad()
     def sample_actions(
         self,
         state: torch.Tensor,
         *,
         num_steps: int = 10,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        batch_size = state.shape[0]
+        chunk = torch.randn(
+            batch_size, self.chunk_size, self.action_dim, device=state.device, dtype=state.dtype
+        )
+        dt = 1.0 / num_steps
+        # Euler integration of dA/dtau = v_theta from tau=0 to tau=1 (Eq. 3).
+        for i in range(num_steps):
+            tau = torch.full((batch_size,), i * dt, device=state.device, dtype=state.dtype)
+            chunk = chunk + dt * self(state, chunk, tau)
+        return chunk
 
 
 PolicyType: TypeAlias = Literal["mse", "flow"]
