@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,7 @@ from hw1_imitation.data import (
     load_pusht_zarr,
 )
 from hw1_imitation.model import build_policy, PolicyType
-from hw1_imitation.evaluation import Logger
+from hw1_imitation.evaluation import Logger, evaluate_policy
 
 LOGDIR_PREFIX = "exp"
 
@@ -55,6 +56,8 @@ class TrainConfig:
     wandb_project: str = "hw1-imitation"
     # Experiment name suffix for logging and WandB.
     exp_name: str | None = None
+    # Whether to torch.compile the training step (faster, but slower startup).
+    compile: bool = True
 
 
 def parse_train_config(
@@ -126,8 +129,88 @@ def run_training(config: TrainConfig) -> None:
         project=config.wandb_project, config=config_to_dict(config), name=exp_name
     )
     logger = Logger(log_dir)
+    # Logger fixes its CSV columns from the first logged row, so declare all
+    # scalar columns (train + eval) up front so eval rewards land in log.csv too.
+    logger.header = [
+        "train/loss",
+        "train/epoch",
+        "train/steps_per_sec",
+        "eval/mean_reward",
+        "step",
+    ]
+    with logger.csv_path.open("w") as f:
+        f.write(",".join(logger.header) + "\n")
 
-    ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
+
+    def train_step(
+        state: torch.Tensor, action_chunk: torch.Tensor
+    ) -> torch.Tensor:
+        optimizer.zero_grad(set_to_none=True)
+        loss = model.compute_loss(state, action_chunk)
+        loss.backward()
+        optimizer.step()
+        return loss.detach()
+
+    if config.compile:
+        train_step = torch.compile(train_step)
+
+    def run_eval(step: int) -> None:
+        evaluate_policy(
+            model,
+            normalizer,
+            device,
+            chunk_size=config.chunk_size,
+            video_size=config.video_size,
+            num_video_episodes=config.num_video_episodes,
+            flow_num_steps=config.flow_num_steps,
+            step=step,
+            logger=logger,
+        )
+        model.train()
+
+    step = 0
+    last_eval_step = -1
+    loss_sum = 0.0
+    loss_count = 0
+    t_last = time.perf_counter()
+    model.train()
+    for epoch in range(config.num_epochs):
+        for state, action_chunk in loader:
+            state = state.to(device, non_blocking=True)
+            action_chunk = action_chunk.to(device, non_blocking=True)
+
+            loss = train_step(state, action_chunk)
+            step += 1
+            loss_sum += loss.item()
+            loss_count += 1
+
+            if step % config.log_interval == 0:
+                now = time.perf_counter()
+                logger.log(
+                    {
+                        "train/loss": loss_sum / loss_count,
+                        "train/epoch": epoch,
+                        "train/steps_per_sec": loss_count / (now - t_last),
+                    },
+                    step=step,
+                )
+                loss_sum = 0.0
+                loss_count = 0
+                t_last = now
+
+            if step % config.eval_interval == 0:
+                run_eval(step)
+                last_eval_step = step
+                t_last = time.perf_counter()
+
+        print(f"epoch {epoch + 1}/{config.num_epochs} | step {step} | loss {loss.item():.4f}")
+
+    # Final evaluation at the end of training (if not just evaluated).
+    if last_eval_step != step:
+        run_eval(step)
 
     logger.dump_for_grading()
 

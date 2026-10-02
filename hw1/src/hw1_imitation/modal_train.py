@@ -7,8 +7,8 @@ from hw1_imitation.train import TrainConfig, parse_train_config, run_training
 
 APP_NAME = "hw1-imitation"
 NETRC_PATH = Path("~/.netrc").expanduser()
-PROJECT_DIR = "/root/project"
-VOLUME_PATH = "/vol"
+PROJECT_DIR = "/Users/xiaoyu/workspace/rl_spring2026/hw1"
+VOLUME_PATH = "/Users/xiaoyu/workspace/rl_spring2026/hw1/vol"
 DEFAULT_GPU = "T4"
 DEFAULT_CPU = 2.0
 volume = modal.Volume.from_name("hw1-imitation-volume", create_if_missing=True)

@@ -34,10 +34,21 @@ class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
         """Generate a chunk of actions with shape (batch, chunk_size, action_dim)."""
 
 
+def build_mlp(input_dim: int, output_dim: int, hidden_dims: tuple[int, ...]) -> nn.Sequential:
+    """Simple MLP: Linear -> ReLU -> ... -> Linear."""
+    layers: list[nn.Module] = []
+    in_dim = input_dim
+    for h in hidden_dims:
+        layers.append(nn.Linear(in_dim, h))
+        layers.append(nn.ReLU())
+        in_dim = h
+    layers.append(nn.Linear(in_dim, output_dim))
+    return nn.Sequential(*layers)
+
+
 class MSEPolicy(BasePolicy):
     """Predicts action chunks with an MSE loss."""
 
-    ### TODO: IMPLEMENT MSEPolicy HERE ###
     def __init__(
         self,
         state_dim: int,
@@ -46,13 +57,21 @@ class MSEPolicy(BasePolicy):
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        # Maps a state to a flattened action chunk of size chunk_size * action_dim.
+        self.net = build_mlp(state_dim, chunk_size * action_dim, hidden_dims)
+
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
+        out = self.net(state)
+        return out.view(-1, self.chunk_size, self.action_dim)
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        pred = self(state)
+        # Squared L2 norm over the whole chunk, averaged over the batch (Eq. 1).
+        return ((pred - action_chunk) ** 2).sum(dim=(1, 2)).mean()
 
     def sample_actions(
         self,
@@ -60,7 +79,7 @@ class MSEPolicy(BasePolicy):
         *,
         num_steps: int = 10,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        return self(state)
 
 
 class FlowMatchingPolicy(BasePolicy):
