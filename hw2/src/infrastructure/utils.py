@@ -29,15 +29,13 @@ def sample_trajectory(
                 cv2.resize(img, dsize=(250, 250), interpolation=cv2.INTER_CUBIC)
             )
 
-        # TODO use the most recent ob to decide what to do
-        ac = None
+        # sample an action from the policy
+        ac = policy.get_action(ob)
 
-        # TODO: take that action and get reward and next ob
-        next_ob, rew, done, info = None, None, None, None
+        next_ob, rew, done, info = env.step(ac)
 
-        # TODO rollout can end due to done, or due to max_length
         steps += 1
-        rollout_done = None
+        rollout_done = done or steps >= max_length
 
         # record result of taking that action
         obs.append(ob)
