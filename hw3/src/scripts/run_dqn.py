@@ -86,9 +86,7 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
     for step in tqdm.trange(config["total_steps"], dynamic_ncols=True):
         epsilon = exploration_schedule.value(step)
 
-        # TODO(Section 2.4): Compute action
-        action = None
-        # ENDTODO
+        action = agent.get_action(observation, epsilon=epsilon)
 
         next_observation, reward, done, info = env.step(action)
         next_observation = np.asarray(next_observation)
@@ -127,15 +125,18 @@ def run_training_loop(config: dict, logger: Logger, args: argparse.Namespace):
 
         # Main DQN training loop
         if step >= config["learning_starts"]:
-            # TODO(Section 2.4): Sample config["batch_size"] samples from the replay buffer
-            batch = None
-            # ENDTODO
+            batch = replay_buffer.sample(config["batch_size"])
 
             batch = ptu.from_numpy(batch)
 
-            # TODO(Section 2.4): Train the agent.
-            update_info = None
-            # ENDTODO
+            update_info = agent.update(
+                obs=batch["observations"],
+                action=batch["actions"],
+                reward=batch["rewards"],
+                next_obs=batch["next_observations"],
+                done=batch["dones"],
+                step=step,
+            )
 
             # Logging code
             update_info["epsilon"] = epsilon
