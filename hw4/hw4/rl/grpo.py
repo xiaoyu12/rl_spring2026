@@ -61,8 +61,7 @@ class GRPO(RLAlgorithm):
                 if float(mask.sum().item()) <= 0.0:
                     skipped_empty += 1
                     continue
-
-                # TODO(student): compute the GRPO minibatch quantities used by the
+                
                 # loss / logging code below.
                 #
                 # Shapes:
@@ -96,7 +95,25 @@ class GRPO(RLAlgorithm):
                 #    (do not add an entropy term to the loss)
                 # 10. clipfrac = masked fraction of completion-token positions where
                 #     the PPO ratio was clipped outside [1-clip_eps, 1+clip_eps]
-                raise NotImplementedError("student TODO: GRPO.update minibatch computations")
+                new_logp = compute_per_token_logprobs(
+                    model, mb.input_ids, mb.attention_mask
+                )
+                log_ratio = (new_logp - mb.old_logprobs).clamp(-20, 20)
+                ratio = log_ratio.exp()
+                token_adv = adv.unsqueeze(1)
+                unclipped = ratio * token_adv
+                clipped = ratio.clamp(1 - cfg.clip_eps, 1 + cfg.clip_eps) * token_adv
+                seq_obj = masked_mean_per_row(torch.minimum(unclipped, clipped), mask)
+                pg_loss = -seq_obj.mean()
+                kl = approx_kl_from_logprobs(new_logp, mb.ref_logprobs, mask)
+                with torch.no_grad():
+                    entropy = -masked_mean(new_logp, mask)
+                    clipfrac = masked_mean(
+                        ((ratio < 1 - cfg.clip_eps) | (ratio > 1 + cfg.clip_eps)).to(
+                            mask.dtype
+                        ),
+                        mask,
+                    )
 
                 loss = (pg_loss + cfg.kl_coef * kl) / max(1, grad_accum_steps)
                 if not torch.isfinite(loss):
