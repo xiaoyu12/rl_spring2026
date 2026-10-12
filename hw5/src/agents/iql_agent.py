@@ -58,8 +58,8 @@ class IQLAgent(nn.Module):
         """
         Compute the expectile loss for IQL
         """
-        # TODO(student): Implement the expectile loss
-        return ...
+        weights = torch.where(adv > 0, 1 - expectile, expectile)
+        return (weights * adv.square()).mean()
 
     @torch.compile
     def update_v(
@@ -70,9 +70,10 @@ class IQLAgent(nn.Module):
         """
         Update V(s) with expectile regression
         """
-        # TODO(student): Compute the value loss
-        v = ...
-        loss = ...
+        with torch.no_grad():
+            q = self.target_critic(observations, actions).amin(dim=0)
+        v = self.value(observations)
+        loss = self.iql_expectile_loss(v - q, self.expectile)
 
         self.value_optimizer.zero_grad()
         loss.backward()
@@ -97,9 +98,10 @@ class IQLAgent(nn.Module):
         """
         Update Q(s, a)
         """
-        # TODO(student): Compute the Q loss
-        q = ...
-        loss = ...
+        with torch.no_grad():
+            target_q = rewards + self.discount * (1 - dones) * self.value(next_observations)
+        q = self.critic(observations, actions)
+        loss = (q - target_q).square().mean()
 
         self.critic_optimizer.zero_grad()
         loss.backward()
@@ -121,9 +123,12 @@ class IQLAgent(nn.Module):
         """
         Update the actor using advantage-weighted regression
         """
-        # TODO(student): Compute the actor loss
-        dist = ...
-        loss = ...
+        with torch.no_grad():
+            q = self.target_critic(observations, actions).amin(dim=0)
+            advantage = q - self.value(observations)
+            weights = (self.alpha * advantage).exp().clamp(max=100.0)
+        dist = self.actor(observations)
+        loss = -(weights * dist.log_prob(actions)).mean()
 
         self.actor_optimizer.zero_grad()
         loss.backward()
@@ -157,5 +162,8 @@ class IQLAgent(nn.Module):
         return metrics
 
     def update_target_critic(self) -> None:
-        # TODO(student): Update target_critic using Polyak averaging with self.target_update_rate
-        ...
+        with torch.no_grad():
+            for target_param, param in zip(
+                self.target_critic.parameters(), self.critic.parameters()
+            ):
+                target_param.lerp_(param, self.target_update_rate)
